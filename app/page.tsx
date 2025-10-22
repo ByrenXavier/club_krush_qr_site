@@ -82,15 +82,82 @@ export default function TableQRGenerator() {
   }
 
   const handlePrint = async () => {
-    // TODO: Implement Epson T82X printer integration
-    // This function will connect to the Epson T82X thermal printer
-    // and send the QR code image for printing
-
     console.log("[v0] Print button clicked for Table", selectedTable)
-    console.log("[v0] QR Code URL:", qrCodeUrl)
+    if (!qrCodeUrl) return
 
-    // Placeholder for Epson T82X printer commands
-    // Will implement ESC/POS commands or Epson SDK integration here
+    // Prefer HTTPS if you enabled SSL on the printer (recommended for iPad on HTTPS site)
+    const PREFERRED_SSL = true
+    const PRINTER_HOST = '192.168.31.20'
+    const SSL_PORT = 8043 // ePOS-Print default SSL port
+    const HTTP_PORT = 8008 // ePOS-Print default HTTP port
+
+    const tryPrint = (useSsl: boolean) => {
+      const img = new Image()
+      img.crossOrigin = 'anonymous'
+      img.onload = () => {
+        const canvas = document.createElement('canvas')
+        canvas.width = img.width
+        canvas.height = img.height
+        const ctx = canvas.getContext('2d')
+        if (!ctx) {
+          window.print()
+          return
+        }
+        ctx.drawImage(img, 0, 0)
+
+        const EpsonNS = (window as any).epson
+        if (!EpsonNS || !EpsonNS.ePOSDevice) {
+          console.error('Epson ePOS JS not loaded')
+          window.print()
+          return
+        }
+        const device = new EpsonNS.ePOSDevice()
+        const port = useSsl ? SSL_PORT : HTTP_PORT
+        device.connect(PRINTER_HOST, port, (result: string) => {
+          const ok = result === 'OK' || result === 'SSL_CONNECT_OK'
+          if (!ok) {
+            console.error('ePOS connect failed:', result)
+            if (useSsl) {
+              // fall back to HTTP once if SSL failed
+              tryPrint(false)
+            } else {
+              window.print()
+            }
+            return
+          }
+          device.createDevice(
+            'local_printer',
+            device.DEVICE_TYPE_PRINTER,
+            { crypto: useSsl, buffer: false },
+            (printer: any, code: any) => {
+              if (!printer) {
+                console.error('CreateDevice error:', code)
+                window.print()
+                return
+              }
+              printer.addTextAlign(printer.ALIGN_CENTER)
+              printer.addImage(canvas, 0, 0, canvas.width, canvas.height)
+              printer.addFeedLine(2)
+              printer.addCut(printer.CUT_FEED)
+              printer.send(
+                () => console.log('Printed'),
+                (err: any) => {
+                  console.error('Send failed:', err)
+                  window.print()
+                }
+              )
+            }
+          )
+        })
+      }
+      img.onerror = () => {
+        console.error('QR image failed to load; using browser print')
+        window.print()
+      }
+      img.src = qrCodeUrl
+    }
+
+    tryPrint(PREFERRED_SSL)
   }
 
   return (

@@ -20,6 +20,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`font-sans antialiased`}>
+        <script src="/epos-2.27.0.js"></script>
         {children}
         <Analytics />
       </body>
