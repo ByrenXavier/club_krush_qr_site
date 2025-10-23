@@ -88,7 +88,20 @@ export default function TableQRGenerator() {
     console.log("[v0] Print button clicked for Table", selectedTable)
     if (!qrCodeUrl) return
 
-    setPrintStatus("Connecting to TM-T82X printer...")
+    setPrintStatus("Opening print dialog...")
+    
+    // Use browser print dialog - user selects TM-T82X from printer list
+    // This is the recommended approach for iPad + Vercel deployment
+    window.print()
+    
+    setPrintStatus("Print dialog opened - select your TM-T82X printer")
+  }
+
+  const handleDirectPrint = async () => {
+    console.log("[v0] Direct print button clicked for Table", selectedTable)
+    if (!qrCodeUrl) return
+
+    setPrintStatus("Sending to print relay server...")
     
     try {
       // Generate the Telegram URL for the QR code
@@ -97,110 +110,43 @@ export default function TableQRGenerator() {
       const tableIdentifier = `table${selectedTable.replace(/\s+/g, "").toUpperCase()}`
       const telegramUrl = `https://t.me/club_krush_bot?start=${tableIdentifier}_${timestamp}`
       
-      await printQRCodeToTM82X(telegramUrl, selectedTable)
+      await printQRCodeViaRelay(telegramUrl, selectedTable)
       setPrintStatus("✅ QR code printed successfully!")
     } catch (error) {
-      console.error("Print error:", error)
-      setPrintStatus(`❌ Print failed: ${error}`)
+      console.error("Direct print error:", error)
+      setPrintStatus(`❌ Print failed: ${error}. Make sure the print relay server is running.`)
     }
   }
 
-  const printQRCodeToTM82X = async (data: string, tableName: string) => {
-    const PRINTER_IP = '192.168.31.20'
-    const PRINTER_PORT = 9100 // Standard ESC/POS port
+  const printQRCodeViaRelay = async (data: string, tableName: string) => {
+    // Get the local IP address of the device running the relay server
+    // You'll need to replace this with your actual local IP
+    const RELAY_SERVER_IP = '192.168.31.1' // Replace with your computer's IP
+    const RELAY_SERVER_PORT = 3001
     
-    // Create ESC/POS commands for QR code printing
-    const commands = new Uint8Array([
-      // Initialize printer
-      0x1B, 0x40, // ESC @ - Initialize printer
-      
-      // Set alignment to center
-      0x1B, 0x61, 0x01, // ESC a 1 - Center alignment
-      
-      // Print header text
-      ...new TextEncoder().encode(`Table ${tableName}\n`),
-      ...new TextEncoder().encode(`Club Krush\n`),
-      ...new TextEncoder().encode(`Scan to order\n\n`),
-      
-      // Set QR code size (module size = 3)
-      0x1D, 0x28, 0x6B, 0x04, 0x00, 0x31, 0x43, 0x03, // GS ( k 4 0 1 C 3
-      
-      // Set QR code error correction level (L = 48)
-      0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x45, 0x30, // GS ( k 3 0 1 E 0
-      
-      // Store QR code data
-      0x1D, 0x28, 0x6B, data.length + 3, 0x00, 0x31, 0x50, 0x30, // GS ( k pL pH 1 P 0
-      ...new TextEncoder().encode(data),
-      
-      // Print QR code
-      0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x51, 0x30, // GS ( k 3 0 1 Q 0
-      
-      // Feed paper
-      0x0A, 0x0A, // LF LF - Feed 2 lines
-      
-      // Print footer text
-      ...new TextEncoder().encode(`@club_krush_bot\n`),
-      ...new TextEncoder().encode(`Thank you!\n`),
-      
-      // Cut paper
-      0x1D, 0x56, 0x00, // GS V 0 - Full cut
-    ])
+    const response = await fetch(`http://${RELAY_SERVER_IP}:${RELAY_SERVER_PORT}/print-qr`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        data: data,
+        tableName: tableName
+      })
+    })
     
-    // Send commands to printer via WebSocket or fetch
-    try {
-      // Try WebSocket first (if printer supports it)
-      const ws = new WebSocket(`ws://${PRINTER_IP}:${PRINTER_PORT}`)
-      
-      return new Promise((resolve, reject) => {
-        ws.onopen = () => {
-          ws.send(commands)
-          ws.close()
-          resolve(true)
-        }
-        
-        ws.onerror = (error) => {
-          // Fallback to HTTP POST
-          fetch(`http://${PRINTER_IP}:${PRINTER_PORT}`, {
-            method: 'POST',
-            body: commands,
-            headers: {
-              'Content-Type': 'application/octet-stream',
-            },
-          })
-          .then(response => {
-            if (response.ok) {
-              resolve(true)
-            } else {
-              reject(new Error(`HTTP ${response.status}`))
-            }
-          })
-          .catch(reject)
-        }
-        
-        setTimeout(() => {
-          ws.close()
-          reject(new Error('WebSocket timeout'))
-        }, 5000)
-      })
-    } catch (error) {
-      // Fallback to HTTP POST
-      const response = await fetch(`http://${PRINTER_IP}:${PRINTER_PORT}`, {
-        method: 'POST',
-        body: commands,
-        headers: {
-          'Content-Type': 'application/octet-stream',
-        },
-      })
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`)
-      }
+    if (!response.ok) {
+      const errorData = await response.json()
+      throw new Error(errorData.error || `HTTP ${response.status}`)
     }
+    
+    const result = await response.json()
+    return result
   }
 
   return (
     <>
-      {/* Print styles for thermal printer */}
+      {/* Print styles optimized for TM-T82X thermal printer */}
       <style jsx global>{`
         @media print {
           @page {
@@ -218,21 +164,37 @@ export default function TableQRGenerator() {
             left: 0;
             top: 0;
             width: 80mm;
-            padding: 5mm;
+            padding: 2mm;
             text-align: center;
+            font-family: monospace;
+            background: white;
+          }
+          .print-content h2 {
+            font-size: 16px;
+            font-weight: bold;
+            margin: 3mm 0;
+            text-transform: uppercase;
+          }
+          .print-content h3 {
+            font-size: 14px;
+            font-weight: bold;
+            margin: 2mm 0;
           }
           .print-content img {
             width: 100%;
-            max-width: 60mm;
+            max-width: 50mm;
             height: auto;
-          }
-          .print-content h2 {
-            font-size: 14px;
-            margin: 5mm 0;
+            margin: 2mm 0;
           }
           .print-content p {
+            font-size: 12px;
+            margin: 1mm 0;
+            line-height: 1.2;
+          }
+          .print-content .footer {
+            margin-top: 3mm;
             font-size: 10px;
-            margin: 2mm 0;
+            color: #666;
           }
         }
       `}</style>
@@ -289,13 +251,17 @@ export default function TableQRGenerator() {
           <>
             {/* Hidden print content */}
             <div className="print-content" style={{ display: 'none' }}>
-              <h2>Table {selectedTable}</h2>
+              <h2>Club Krush</h2>
+              <h3>Table {selectedTable}</h3>
+              <p>Scan to order</p>
               <img
                 src={qrCodeUrl}
                 alt={`QR Code for ${selectedTable}`}
               />
-              <p>Scan to open Telegram bot</p>
               <p>@club_krush_bot</p>
+              <div className="footer">
+                <p>Thank you for dining with us!</p>
+              </div>
             </div>
             
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50" onClick={closeQRCode}>
@@ -316,9 +282,16 @@ export default function TableQRGenerator() {
                   {printStatus && (
                     <p className="text-sm text-center text-muted-foreground">{printStatus}</p>
                   )}
+                  <div className="text-xs text-muted-foreground text-center space-y-1">
+                    <p><strong>Print (Recommended):</strong> Uses iPad's print dialog</p>
+                    <p><strong>Direct Print:</strong> Uses print relay server (requires setup)</p>
+                  </div>
                   <div className="flex gap-2 w-full">
                     <Button onClick={handlePrint} className="flex-1 cursor-pointer">
-                      Print
+                      Print (Recommended)
+                    </Button>
+                    <Button onClick={handleDirectPrint} variant="outline" className="flex-1 cursor-pointer">
+                      Direct Print
                     </Button>
                     <Button onClick={closeQRCode} variant="outline" className="flex-1 bg-transparent cursor-pointer">
                       Close
